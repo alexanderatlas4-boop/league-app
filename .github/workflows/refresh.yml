@@ -10,6 +10,14 @@ on:
         description: "First season to load (blank = just this season)"
         required: false
         default: ""
+      rename_from:
+        description: "Optional name change: the name as ESPN has it"
+        required: false
+        default: ""
+      rename_to:
+        description: "Optional name change: the name to show (blank removes the change)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -30,6 +38,8 @@ jobs:
           ESPN_S2: ${{ secrets.ESPN_S2 }}
           ESPN_SWID: ${{ secrets.ESPN_SWID }}
           START: ${{ github.event.inputs.start }}
+          RENAME_FROM: ${{ github.event.inputs.rename_from }}
+          RENAME_TO: ${{ github.event.inputs.rename_to }}
       # GitHub pauses scheduled jobs in public repos after 60 days without activity.
       # Recording each run keeps the weekly schedule alive all season.
       - name: Keep the schedule alive
