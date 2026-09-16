@@ -137,7 +137,7 @@ def page_data(L, SET, overrides):
         renames=db.load_renames(ENG),
         settings=dict(bankroll=SET.get("bankroll"), topUp=SET.get("top_up"), playoffTeams=SET.get("playoff_teams") or 0,
                       kickoff=SET.get("kickoff") or {}, lockAt=SET.get("lock_at"), allowSelf=bool(SET.get("allow_self")),
-                      requireApproval=bool(SET.get("require_approval"))),
+                      requireApproval=bool(SET.get("require_approval")), maxBet=int(SET.get("max_bet") or 100)),
         locks={k: 1 for k, v in (SET.get("manual_locks") or {}).items() if v},
         picks=picks,
         book=dict(posted=overrides, bets=bets),
@@ -233,26 +233,26 @@ def place_bet(a, L, SET, effective):
     err = against_self(me, m["id"], side["id"], side.get("team"), bool(SET.get("allow_self")))
     if err:
         return notify(err, "err")
-    stake = int(a.get("stake") or 0)
-    s = int(mk.split("|")[0])
-    ledger = L.ledger(s, db.load_bets(ENG), int(SET.get("bankroll") or 1000), int(SET.get("top_up") or 0))
-    avail = ledger.get(me, {}).get("available", 0)
-    if stake < 1:
-        return notify("Enter a stake.", "err")
-    if stake > avail:
-        return notify(f"You only have ${avail:,.0f} available.", "err")
+    max_bet = int(SET.get("max_bet") or 100)
+    try:
+        raw = float(a.get("stake") or 0)
+    except (TypeError, ValueError):
+        raw = 0
+    stake = int(raw)
+    if raw != stake or not 1 <= stake <= max_bet:
+        return notify(f"Bets run from $1 to ${max_bet:,}, in whole dollars.", "err")
     status = "pending" if SET.get("require_approval") else "open"
     db.add_bet(ENG, dict(team_name=me, market_key=mk, market_id=m["id"], side=side["id"], team=side.get("team"),
                          line=side.get("line"), price=int(side["price"]), stake=stake, status=status))
-    notify(("Bet sent for approval. " if status == "pending" else "Bet placed. ") +
-           f"${stake:,} to win ${profit(stake, side['price']):,.0f}.")
+    notify(("Bet sent for approval: " if status == "pending" else "Bet placed: ") +
+           f"${stake:,} to win ${profit(stake, side['price']):,.2f}.")
 
 
 def admin_save(a, SET):
     st_ = a.get("settings")
     if st_:
         mapping = dict(bankroll="bankroll", topUp="top_up", playoffTeams="playoff_teams", lockAt="lock_at",
-                       allowSelf="allow_self", requireApproval="require_approval", kickoff="kickoff")
+                       allowSelf="allow_self", requireApproval="require_approval", kickoff="kickoff", maxBet="max_bet")
         for k, v in st_.items():
             if k in mapping and v is not None:
                 db.set_setting(ENG, mapping[k], v)
