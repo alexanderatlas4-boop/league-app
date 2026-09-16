@@ -31,7 +31,7 @@ SCHEMA = [
     """CREATE TABLE IF NOT EXISTS bets (
         id TEXT PRIMARY KEY, team_name TEXT NOT NULL, market_key TEXT NOT NULL, market_id TEXT NOT NULL,
         side TEXT NOT NULL, team TEXT, line DOUBLE PRECISION, price INTEGER NOT NULL, stake INTEGER NOT NULL,
-        status TEXT NOT NULL, grade TEXT, created_at BIGINT NOT NULL)""",
+        status TEXT NOT NULL, grade TEXT, created_at BIGINT NOT NULL, legs TEXT)""",
     """CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)""",
     """CREATE TABLE IF NOT EXISTS refresh_log (at BIGINT NOT NULL, note TEXT NOT NULL)""",
 ]
@@ -66,6 +66,14 @@ def init(eng):
     with eng.begin() as c:
         for stmt in SCHEMA:
             c.execute(sa.text(stmt))
+    # Upgrades for databases created before parlays existed.
+    try:
+        with eng.begin() as c:
+            cols = {col["name"] for col in sa.inspect(c).get_columns("bets")}
+            if "legs" not in cols:
+                c.execute(sa.text("ALTER TABLE bets ADD COLUMN legs TEXT"))
+    except Exception:
+        pass
 
 
 def rows(eng, sql, **params):
@@ -211,8 +219,9 @@ def add_bet(eng, bet):
     b.setdefault("id", secrets.token_hex(8))
     b.setdefault("created_at", now_ms())
     b.setdefault("grade", None)
-    execute(eng, """INSERT INTO bets (id, team_name, market_key, market_id, side, team, line, price, stake, status, grade, created_at)
-                    VALUES (:id, :team_name, :market_key, :market_id, :side, :team, :line, :price, :stake, :status, :grade, :created_at)""", b)
+    b.setdefault("legs", None)
+    execute(eng, """INSERT INTO bets (id, team_name, market_key, market_id, side, team, line, price, stake, status, grade, created_at, legs)
+                    VALUES (:id, :team_name, :market_key, :market_id, :side, :team, :line, :price, :stake, :status, :grade, :created_at, :legs)""", b)
     return b["id"]
 
 

@@ -58,6 +58,24 @@ def american(p, hold=0.045):
 
 
 def fmt_odds(a): return f"+{a}" if a > 0 else str(a)
+def decimal_odds(a): return 1 + a / 100 if a > 0 else 1 + 100 / -a
+def american_from_decimal(d): return round((d - 1) * 100 if d >= 2 else -100 / (d - 1))
+
+
+def leg_key(market_id):
+    kind = market_id.split("|")[0]
+    return market_id[len(kind) + 1:] if kind in ("ml", "sp", "tot") else market_id
+
+
+def parlay_legs(bet):
+    legs = bet.get("legs")
+    if isinstance(legs, str):
+        import json
+        try:
+            legs = json.loads(legs)
+        except ValueError:
+            legs = []
+    return legs or []
 def fmt_spread(x): return "PK" if x == 0 else f"{x:+.1f}"
 def profit(stake, price): return stake * price / 100 if price > 0 else stake * 100 / -price
 def record(w, l, t=0): return f"{w}–{l}" + (f"–{t}" if t else "")
@@ -506,6 +524,11 @@ class League:
     # ------------------------------------------------------------ bets
     def grade(self, bet):
         if bet.get("grade"): return bet["grade"]
+        if bet["market_id"] == "parlay":
+            results = [self.grade(dict(l, grade=None)) for l in parlay_legs(bet)]
+            if "loss" in results: return "loss"
+            if any(r is None for r in results): return None
+            return "win" if "win" in results else "push"
         kind = bet["market_id"].split("|")[0]
         if kind in ("ml", "sp", "tot"):
             key = bet["market_id"][len(kind) + 1:]
@@ -536,6 +559,15 @@ class League:
             return "win" if (bet["side"] == "o") == (wv > bet["line"]) else "loss"
         return None
 
+    def bet_profit(self, bet):
+        if bet["market_id"] != "parlay":
+            return profit(bet["stake"], bet["price"])
+        d = 1.0
+        for leg in parlay_legs(bet):
+            if bet.get("grade") == "win" or self.grade(dict(leg, grade=None)) == "win":
+                d *= decimal_odds(leg["price"])
+        return bet["stake"] * (d - 1)
+
     def weeks_played(self, s):
         return len({g["week"] for g in self.games if g["season"] == s and counted(g)})
 
@@ -551,7 +583,7 @@ class League:
             gr = self.grade(b)
             r["bets"] += 1
             if not gr: r["risk"] += b["stake"]
-            elif gr == "win": r["pl"] += profit(b["stake"], b["price"]); r["w"] += 1
+            elif gr == "win": r["pl"] += self.bet_profit(b); r["w"] += 1
             elif gr == "loss": r["pl"] -= b["stake"]; r["l"] += 1
             elif gr == "push": r["p"] += 1
         for r in rows.values():
@@ -583,6 +615,8 @@ class League:
 
 
 def market_label(bet):
+    if bet["market_id"] == "parlay":
+        return f"{len(parlay_legs(bet))}-leg parlay"
     kind, side, team, line = bet["market_id"].split("|")[0], bet["side"], bet.get("team"), bet.get("line")
     if kind == "ml": return f"{team} to win"
     if kind == "sp": return f"{team} {fmt_spread(line)}"
