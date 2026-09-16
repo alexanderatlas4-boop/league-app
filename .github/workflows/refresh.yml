@@ -1,0 +1,23 @@
+name: Weekly ESPN refresh
+
+on:
+  schedule:
+    - cron: "0 12 * * 2"     # Tuesdays 12:00 UTC (8 AM ET), after Monday night's games
+    # - cron: "0 18 * * 4"   # Optional: Thursdays 2 PM ET, to pick up lineup and injury news
+  workflow_dispatch: {}      # lets you run it by hand from the Actions tab
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python scripts/refresh.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ESPN_LEAGUE_ID: ${{ secrets.ESPN_LEAGUE_ID }}
+          ESPN_S2: ${{ secrets.ESPN_S2 }}
+          ESPN_SWID: ${{ secrets.ESPN_SWID }}
