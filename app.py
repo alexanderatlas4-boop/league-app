@@ -17,7 +17,8 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from core import db
-from core.model import League, against_self, lock_time, now_utc, profit
+from core.model import (League, against_self, american_from_decimal, decimal_odds, fmt_odds, leg_key, lock_time,
+                        now_utc, parlay_legs, profit)
 
 st.set_page_config(page_title="League record book", page_icon="🏈", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
@@ -128,9 +129,14 @@ def page_data(L, SET, overrides):
         e = wk.setdefault(p["team_name"], {"p": {}, "at": p["created_at"]})
         e["p"][p["game_key"]] = p["pick"]
         e["at"] = max(e["at"], p["created_at"])
-    bets = [dict(id=b["id"], who=b["team_name"], mk=b["market_key"], market=b["market_id"], side=b["side"], team=b["team"],
-                 line=b["line"], price=b["price"], stake=b["stake"], at=b["created_at"], status=b["status"], grade=b["grade"])
-            for b in db.load_bets(ENG)]
+    bets = []
+    for b in db.load_bets(ENG):
+        row = dict(id=b["id"], who=b["team_name"], mk=b["market_key"], market=b["market_id"], side=b["side"], team=b["team"],
+                   line=b["line"], price=b["price"], stake=b["stake"], at=b["created_at"], status=b["status"], grade=b["grade"])
+        if b["market_id"] == "parlay":
+            row["legs"] = [dict(mk=l["mk"], market=l["market_id"], side=l["side"], team=l.get("team"), line=l.get("line"),
+                                price=l["price"]) for l in parlay_legs(b)]
+        bets.append(row)
     return dict(
         name=SET.get("league_name") or "Home League",
         games=games,
@@ -178,6 +184,8 @@ def handle(a, L, SET, effective):
         place_picks(a, L, SET)
     elif kind == "bet":
         place_bet(a, L, SET, effective)
+    elif kind == "parlay":
+        place_parlay(a, L, SET, effective)
     elif kind in ("admin_save", "import", "pw_reset", "refresh"):
         if not ss.admin:
             notify("Commissioner tools are locked.", "err")
@@ -246,6 +254,62 @@ def place_bet(a, L, SET, effective):
                          line=side.get("line"), price=int(side["price"]), stake=stake, status=status))
     notify(("Bet sent for approval: " if status == "pending" else "Bet placed: ") +
            f"${stake:,} to win ${profit(stake, side['price']):,.2f}.")
+
+
+def check_stake(a, SET):
+    max_bet = int(SET.get("max_bet") or 100)
+    try:
+        raw = float(a.get("stake") or 0)
+    except (TypeError, ValueError):
+        raw = 0
+    stake = int(raw)
+    if raw != stake or not 1 <= stake <= max_bet:
+        notify(f"Bets run from $1 to ${max_bet:,}, in whole dollars.", "err")
+        return None
+    return stake
+
+
+def place_parlay(a, L, SET, effective):
+    me = ss.team
+    if not me:
+        return notify("Sign in first.", "err")
+    legs_in = a.get("legs") or []
+    if not 2 <= len(legs_in) <= 8:
+        return notify("A parlay needs 2 to 8 legs.", "err")
+    legs, seen = [], set()
+    for leg in legs_in:
+        mk = leg.get("mk") or ""
+        markets = effective.get(mk)
+        if not markets or market_locked(L, SET, mk):
+            return notify("One of those legs is locked or no longer offered. Remove it and try again.", "err")
+        m = next((x for x in markets if x["id"] == leg.get("market")), None)
+        side = m and next((x for x in m["sides"] if x["id"] == leg.get("side")), None)
+        if not side:
+            return notify("One of those legs isn't available.", "err")
+        if side["price"] != leg.get("price") or side.get("line") != leg.get("line"):
+            return notify("A line in your parlay just moved. Check the new number and try again.", "err")
+        err = against_self(me, m["id"], side["id"], side.get("team"), bool(SET.get("allow_self")))
+        if err:
+            return notify(err, "err")
+        key = (mk, leg_key(m["id"]))
+        if key in seen:
+            return notify("Only one leg per game in a parlay.", "err")
+        seen.add(key)
+        legs.append(dict(mk=mk, market_id=m["id"], side=side["id"], team=side.get("team"), line=side.get("line"),
+                         price=int(side["price"])))
+    stake = check_stake(a, SET)
+    if stake is None:
+        return
+    dec = 1.0
+    for leg in legs:
+        dec *= decimal_odds(leg["price"])
+    price = american_from_decimal(dec)
+    status = "pending" if SET.get("require_approval") else "open"
+    season = int(legs[0]["mk"].split("|")[0])
+    db.add_bet(ENG, dict(team_name=me, market_key=f"{season}|parlay", market_id="parlay", side="parlay", team=None, line=None,
+                         price=price, stake=stake, status=status, legs=json.dumps(legs)))
+    notify(("Parlay sent for approval: " if status == "pending" else f"{len(legs)}-leg parlay placed: ") +
+           f"${stake:,} at {fmt_odds(price)} to win ${stake * (dec - 1):,.2f}.")
 
 
 def admin_save(a, SET):
