@@ -115,6 +115,14 @@ table.bboard td.name,table.bboard th.l{text-align:left;padding-right:24px}
 table.bboard tbody+tbody{border-top:2px solid var(--line)}
 .slip{border:2px solid var(--pennant)}
 .slip-sel .ln-p{color:var(--c1);font-weight:700;margin-left:4px}
+.slip-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.slip-head h3{margin:0}
+ul.leg-list{list-style:none;margin:0 0 8px;padding:0}
+ul.leg-list li{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:7px 0;border-bottom:1px solid var(--line)}
+ul.leg-list li>span:first-child{flex:1 1 220px}
+ul.leg-list .ln-p{color:var(--c1);font-weight:700}
+td.bet-desc .legs{display:block;font-size:12.5px;color:var(--muted);white-space:normal}
+td.bet-desc .legs>span{display:block}
 .slip-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 24px;margin:10px 0}
 .slip-row label{display:grid;gap:4px;font-weight:600;font-size:14px}
 .slip-row input{width:140px;padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
@@ -1306,6 +1314,10 @@ function amer(p, hold){
 function odds(a){ return a > 0 ? '+' + a : String(a); }
 function profit(stake, price){ return price > 0 ? stake * price / 100 : stake * 100 / -price; }
 function half(x){ return Math.round(x * 2) / 2; }
+function decOdds(a){ return a > 0 ? 1 + a / 100 : 1 + 100 / -a; }
+function amerFromDec(d){ return Math.round(d >= 2 ? (d - 1) * 100 : -100 / (d - 1)); }
+function legKey(marketId){ var k = marketId.split('|')[0]; return (k === 'ml' || k === 'sp' || k === 'tot') ? marketId.slice(k.length + 1) : marketId; }
+var MAX_LEGS = 8;
 function fmtSpread(x){ return x === 0 ? 'PK' : (x > 0 ? '+' : '') + x.toFixed(1); }
 function units(n, signed){
   var v = Math.round(n * 100) / 100, a = Math.abs(v);
@@ -1450,6 +1462,12 @@ function marketLocked(mk){
 }
 function gradeBet(b){
   if (b.grade) return b.grade;
+  if (b.market === 'parlay') {
+    var res = (b.legs || []).map(function(l){ return gradeBet({ market:l.market, side:l.side, team:l.team, line:l.line, price:l.price }); });
+    if (res.indexOf('loss') >= 0) return 'loss';
+    if (res.some(function(r){ return !r; })) return null;
+    return res.indexOf('win') >= 0 ? 'win' : 'push';
+  }
   var kind = b.market.split('|')[0];
   if (kind === 'ml' || kind === 'sp' || kind === 'tot') {
     var key = b.market.slice(kind.length + 1);
@@ -1475,6 +1493,14 @@ function weeksPlayed(season){
   L.games.forEach(function(g){ if (g.season === season && g.type !== 'consolation') wk[g.week] = 1; });
   return Object.keys(wk).length;
 }
+function betProfit(b){
+  if (b.market !== 'parlay') return profit(b.stake, b.price);
+  var d = (b.legs || []).reduce(function(acc, l){
+    var g = b.grade === 'win' ? 'win' : gradeBet({ market:l.market, side:l.side, team:l.team, line:l.line, price:l.price });
+    return g === 'win' ? acc * decOdds(l.price) : acc;
+  }, 1);
+  return b.stake * (d - 1);
+}
 function ledger(season){
   var rows = {};
   L.managers.forEach(function(m){ rows[m] = { m:m, pl:0, risk:0, pending:0, w:0, l:0, p:0, bets:0, staked:0 }; });
@@ -1487,7 +1513,7 @@ function ledger(season){
     var gr = gradeBet(b);
     r.bets++;
     if (!gr) r.risk += b.stake;
-    else if (gr === 'win') { r.pl += profit(b.stake, b.price); r.w++; r.staked += b.stake; }
+    else if (gr === 'win') { r.pl += betProfit(b); r.w++; r.staked += b.stake; }
     else if (gr === 'loss') { r.pl -= b.stake; r.l++; r.staked += b.stake; }
     else if (gr === 'push') r.p++;
   });
@@ -1500,7 +1526,17 @@ function sideLine(m, sd){
   if (sd.line != null) return (sd.id === 'o' ? 'O ' : 'U ') + sd.line.toFixed(1);
   return '';
 }
+function betDesc(b){
+  if (b.market !== 'parlay') return esc(betLabel(b));
+  var legs = b.legs || [];
+  return '<b>' + legs.length + '-leg parlay</b><span class="legs">' + legs.map(function(l){
+    var g = b.status === 'open' ? gradeBet({ market:l.market, side:l.side, team:l.team, line:l.line, price:l.price }) : null;
+    var mark = g === 'win' ? '<span class="pos">✓</span> ' : g === 'loss' ? '<span class="neg">✗</span> ' : g ? '<span class="muted">–</span> ' : '';
+    return '<span>' + mark + esc(betLabel({ market:l.market, side:l.side, team:l.team, line:l.line })) + ' <span class="muted">' + odds(l.price) + '</span></span>';
+  }).join('') + '</span>';
+}
 function betLabel(b){
+  if (b.market === 'parlay') return (b.legs || []).length + '-leg parlay';
   var kind = b.market.split('|')[0];
   if (kind === 'ml') return b.team + ' to win';
   if (kind === 'sp') return b.team + ' ' + fmtSpread(b.line);
@@ -1512,9 +1548,12 @@ function betLabel(b){
   return b.label;
 }
 
+var slipMode = 'straight', parlayLegs = [];
 var slip = null, stakeVal = '', betCode = '', lineEdit = null, codesText = '', lateOk = false;
 function lineBtn(mk, m, sd, locked){
-  var on = slip && slip.mk === mk && slip.market === m.id && slip.side === sd.id;
+  var on = slipMode === 'parlay'
+    ? parlayLegs.some(function(l){ return l.mk === mk && l.market === m.id && l.side === sd.id; })
+    : slip && slip.mk === mk && slip.market === m.id && slip.side === sd.id;
   var ln = sideLine(m, sd);
   return '<button type="button" class="ln" data-act="slip" data-mk="' + esc(mk) + '" data-market="' + esc(m.id) + '" data-side="' + esc(sd.id) + '" aria-pressed="' + !!on + '"' + (locked ? ' disabled' : '') + '>' +
     (ln ? '<span class="ln-l">' + esc(ln) + '</span>' : '') + '<span class="ln-p">' + odds(sd.price) + '</span></button>';
@@ -1566,14 +1605,61 @@ function findSel(){
   var sd = m && m.sides.filter(function(x){ return x.id === slip.side; })[0];
   return m && sd ? { p:p, m:m, sd:sd } : null;
 }
+function slipHead(){
+  return '<div class="slip-head"><h3>Bet slip</h3><div class="scope" role="group" aria-label="Bet type">' +
+    '<button type="button" data-act="slip-mode" data-mode="straight" aria-pressed="' + (slipMode === 'straight') + '">Straight</button>' +
+    '<button type="button" data-act="slip-mode" data-mode="parlay" aria-pressed="' + (slipMode === 'parlay') + '">Parlay' + (parlayLegs.length ? ' (' + parlayLegs.length + ')' : '') + '</button></div></div>';
+}
+function legInfo(l){
+  var p = posted(l.mk);
+  var m = p && p.markets.filter(function(x){ return x.id === l.market; })[0];
+  var sd = m && m.sides.filter(function(x){ return x.id === l.side; })[0];
+  return m && sd ? { l:l, m:m, sd:sd } : null;
+}
+function parlayPanel(me){
+  var legs = parlayLegs.map(legInfo).filter(Boolean);
+  var out = '<section class="panel slip">' + slipHead();
+  if (!legs.length) return out + '<p class="muted">Tap lines to add legs: 2 to ' + MAX_LEGS + ', one per game. The odds multiply.</p></section>';
+  var dec = legs.reduce(function(acc, x){ return acc * decOdds(x.sd.price); }, 1), am = amerFromDec(dec);
+  var stake = parseStake(stakeVal);
+  var lockedLeg = legs.filter(function(x){ return marketLocked(x.l.mk); })[0];
+  var selfLeg = legs.map(function(x){ return againstSelf(me, x.m.id, x.sd.id, x.sd.team); }).filter(Boolean)[0];
+  var err = !me ? (authOn() || SERVER ? 'Sign in first.' : 'Choose your name first.') : legs.length < 2 ? 'Add at least 2 legs.' :
+    lockedLeg ? 'One of these legs is locked. Remove it to continue.' : selfLeg ? selfLeg :
+    (stakeVal !== '' && !stake) ? 'Bets run from $1 to ' + units(cfg().maxBet) + ', in whole dollars.' : '';
+  out += '<ul class="leg-list">' + legs.map(function(x, i){
+    var wk = x.l.mk.split('|')[1];
+    return '<li><span><b>' + esc(betLabel({ market:x.m.id, team:x.sd.team, side:x.sd.id, line:x.sd.line })) + '</b> <span class="muted">' +
+      esc(x.m.kind === 'wins' || x.m.kind === 'po' || x.m.kind === 'title' || x.m.kind === 'pf' ? 'season' : x.m.title + ', week ' + wk) + '</span></span>' +
+      '<span class="ln-p">' + odds(x.sd.price) + '</span><button type="button" class="linkish" data-act="leg-remove" data-i="' + i + '" aria-label="Remove leg">Remove</button></li>';
+  }).join('') + '</ul>';
+  out += '<p class="slip-sel">Parlay odds <span class="ln-p">' + (legs.length > 1 ? odds(am) : '–') + '</span> <span class="muted">(' + dec.toFixed(2) + '× your stake back)</span></p>' +
+    '<div class="slip-row"><label>Stake ($) <input type="number" min="1" max="' + cfg().maxBet + '" step="1" inputmode="numeric" id="stake" value="' + esc(stakeVal) + '"></label>' +
+    '<p>To win <b id="towin">' + units(stake > 0 ? stake * (dec - 1) : 0) + '</b></p></div>' +
+    (err ? '<p class="neg">' + esc(err) + '</p>' : '') +
+    '<div class="actions" style="justify-content:flex-start">' +
+    (canSubmit() ? '<button type="button" class="btn primary" data-act="bet-save"' + (err || !stake ? ' disabled' : '') + '>Place parlay</button>' : '') +
+    (SERVER ? '' : '<button type="button" class="btn' + (canWrite() ? '' : ' primary') + '" data-act="bet-code"' + (err || !stake ? ' disabled' : '') + '>Get bet code</button>') +
+    '<button type="button" class="btn" data-act="slip-clear">Clear</button></div>' +
+    (betCode ? '<div class="codebox"><p>Text this code to the commissioner. The bet counts once they accept it.</p><textarea readonly class="code" rows="2" data-selectall>' + esc(betCode) + '</textarea><button type="button" class="btn" data-act="copy" data-text="' + esc(betCode) + '">Copy code</button></div>' : '');
+  return out + '</section>';
+}
+function parlayPayload(){
+  var legs = parlayLegs.map(legInfo).filter(Boolean);
+  var dec = legs.reduce(function(acc, x){ return acc * decOdds(x.sd.price); }, 1);
+  return signPayload({ t:'bet', v:1, id:uid(), who:getMe(), mk:legs[0].l.mk.split('|')[0] + '|parlay', market:'parlay', side:'parlay', team:null, line:null,
+    price:amerFromDec(dec), stake:parseStake(stakeVal), at:Date.now(),
+    legs:legs.map(function(x){ return { mk:x.l.mk, market:x.m.id, side:x.sd.id, team:x.sd.team || null, line:x.sd.line == null ? null : x.sd.line, price:x.sd.price }; }) });
+}
 function slipPanel(me, led){
+  if (slipMode === 'parlay') return parlayPanel(me);
   var sel = findSel();
-  if (!sel) return '<section class="panel slip"><h3>Bet slip</h3><p class="muted">Tap any posted line to start a bet.</p></section>';
+  if (!sel) return '<section class="panel slip">' + slipHead() + '<p class="muted">Tap any posted line to start a bet.</p></section>';
   var locked = marketLocked(slip.mk), stake = parseStake(stakeVal);
   var label = betLabel({ market:sel.m.id, team:sel.sd.team, side:sel.sd.id, line:sel.sd.line, label:sel.sd.label });
   var selfErr = againstSelf(me, sel.m.id, sel.sd.id, sel.sd.team);
   var err = !me ? (authOn() || SERVER ? 'Sign in first.' : 'Choose your name first.') : locked ? 'This line is locked.' : selfErr ? selfErr : (stakeVal !== '' && !stake) ? 'Bets run from $1 to ' + units(cfg().maxBet) + ', in whole dollars.' : '';
-  return '<section class="panel slip"><h3>Bet slip</h3><p class="slip-sel"><b>' + esc(label) + '</b> <span class="ln-p">' + odds(sel.sd.price) + '</span></p>' +
+  return '<section class="panel slip">' + slipHead() + '<p class="slip-sel"><b>' + esc(label) + '</b> <span class="ln-p">' + odds(sel.sd.price) + '</span></p>' +
     '<p class="muted">' + esc(sel.m.title) + (sel.m.kind === 'wins' || sel.m.kind === 'title' || sel.m.kind === 'pf' || sel.m.kind === 'po' ? '' : ', week ' + esc(slip.mk.split('|')[1])) + '</p>' +
     '<div class="slip-row"><label>Stake ($) <input type="number" min="1" max="' + cfg().maxBet + '" step="1" inputmode="numeric" id="stake" value="' + esc(stakeVal) + '"></label>' +
     '<p>To win <b id="towin">' + money(stake > 0 ? profit(stake, sel.sd.price) : 0) + '</b></p></div>' +
@@ -1591,10 +1677,10 @@ function betPayload(){
 }
 function betRow(b, manage){
   var gr = b.status === 'open' ? gradeBet(b) : null;
-  var res = b.status === 'pending' ? 'Awaiting approval' : b.status === 'rejected' ? 'Rejected' : !gr ? 'Open' : gr === 'win' ? 'Won ' + units(profit(b.stake, b.price), true) : gr === 'loss' ? 'Lost ' + units(-b.stake, true) : gr === 'push' ? 'Push' : 'Void';
+  var res = b.status === 'pending' ? 'Awaiting approval' : b.status === 'rejected' ? 'Rejected' : !gr ? 'Open' : gr === 'win' ? 'Won ' + units(betProfit(b), true) : gr === 'loss' ? 'Lost ' + units(-b.stake, true) : gr === 'push' ? 'Push' : 'Void';
   var cl = gr === 'win' ? 'pos' : gr === 'loss' ? 'neg' : 'muted';
   var wk = b.mk.split('|')[1];
-  return '<tr>' + (manage !== false ? '<td class="name">' + esc(b.who) + '</td>' : '') + '<td class="l">' + esc(betLabel(b)) + '</td><td>' + (wk === 'season' ? 'Season' : 'Week ' + esc(wk)) + '</td><td>' + odds(b.price) + '</td><td>' + money(b.stake) + '</td><td class="' + cl + '">' + res + '</td>' +
+  return '<tr>' + (manage !== false ? '<td class="name">' + esc(b.who) + '</td>' : '') + '<td class="l bet-desc">' + betDesc(b) + '</td><td>' + (wk === 'season' ? 'Season' : wk === 'parlay' ? 'Parlay' : 'Week ' + esc(wk)) + '</td><td>' + odds(b.price) + '</td><td>' + money(b.stake) + '</td><td class="' + cl + '">' + res + '</td>' +
     (manage === 'grade' ? '<td><select data-act="grade" data-id="' + esc(b.id) + '" aria-label="Grade this bet">' + [['', 'Auto'], ['win', 'Win'], ['loss', 'Loss'], ['push', 'Push'], ['void', 'Void']].map(function(o){ return '<option value="' + o[0] + '"' + ((b.grade || '') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></td>' : '') +
     (manage === 'pending' ? '<td><button type="button" class="btn sm" data-act="accept" data-id="' + esc(b.id) + '">Accept</button> <button type="button" class="btn sm" data-act="reject" data-id="' + esc(b.id) + '">Reject</button></td>' : '') + '</tr>';
 }
@@ -1708,10 +1794,14 @@ function addCodes(){
       } else if (o.t === 'bet') {
         if (d.book.bets.some(function(b){ return b.id === o.id; })) { skipped.push(o.who + '\'s duplicate bet'); return; }
         if (againstSelf(o.who, o.market, o.side, o.team)) { skipped.push(o.who + '\'s bet against their own team'); return; }
-        var isSeason = o.mk.split('|')[1] === 'season';
-        var lockT = isSeason ? null : lockTime(+o.mk.split('|')[0], +o.mk.split('|')[1]);
-        if (!lateOk && ((lockT && o.at > lockT) || marketLocked(o.mk))) { skipped.push(o.who + '\'s late bet'); return; }
-        d.book.bets.push({ id:o.id, who:o.who, mk:o.mk, market:o.market, side:o.side, team:o.team, line:o.line, price:o.price, stake:o.stake, at:o.at, status:'open' });
+        var legsIn = o.market === 'parlay' ? (o.legs || []) : [o];
+        var late = legsIn.some(function(l){
+          var w = l.mk.split('|')[1], lt = w === 'season' ? null : lockTime(+l.mk.split('|')[0], +w);
+          return (lt && o.at > lt) || marketLocked(l.mk);
+        });
+        if (!lateOk && late) { skipped.push(o.who + '\'s late bet'); return; }
+        if (o.market === 'parlay' && legsIn.some(function(l){ return againstSelf(o.who, l.market, l.side, l.team); })) { skipped.push(o.who + '\'s parlay against their own team'); return; }
+        d.book.bets.push({ id:o.id, who:o.who, mk:o.mk, market:o.market, side:o.side, team:o.team, line:o.line, price:o.price, stake:o.stake, at:o.at, status:'open', legs:o.legs });
         added++;
       } else skipped.push('an unknown code');
     });
@@ -1727,6 +1817,11 @@ function bookClick(e){
   if (authClick(act, t)) return true;
   if (act === 'pick') { pickSel.p[t.dataset.k] = t.dataset.team; pickCode = ''; render(); }
   else if (act === 'pick-save' && SERVER) { var po = pickPayload(); sendAction({ type:'picks', s:po.s, w:po.w, picks:po.p }); }
+  else if (act === 'bet-save' && SERVER && slipMode === 'parlay') {
+    var pp = parlayPayload();
+    sendAction({ type:'parlay', stake:pp.stake, legs:pp.legs });
+    parlayLegs = []; stakeVal = ''; render();
+  }
   else if (act === 'bet-save' && SERVER) {
     var bp = betPayload();
     sendAction({ type:'bet', mk:bp.mk, market:bp.market, side:bp.side, team:bp.team, line:bp.line, price:bp.price, stake:bp.stake });
@@ -1741,14 +1836,29 @@ function bookClick(e){
   else if (act === 'pick-save') { var o = pickPayload(); var d = clone(D()); applyPick(d, o); saveData(d, 'Picks saved. Reloading…'); }
   else if (act === 'pick-code') { pickCode = encodeCode(pickPayload()); render(); }
   else if (act === 'copy') copyText(t.dataset.text, 'Code copied. Send it to the commissioner.');
+  else if (act === 'slip-mode') { slipMode = t.dataset.mode; betCode = ''; render(); }
+  else if (act === 'leg-remove') { parlayLegs.splice(+t.dataset.i, 1); betCode = ''; render(); }
+  else if (act === 'slip' && slipMode === 'parlay') {
+    var nl = { mk:t.dataset.mk, market:t.dataset.market, side:t.dataset.side }, key = legKey(nl.market);
+    var same = parlayLegs.filter(function(l){ return l.mk === nl.mk && l.market === nl.market && l.side === nl.side; })[0];
+    if (same) parlayLegs.splice(parlayLegs.indexOf(same), 1);
+    else {
+      var clash = parlayLegs.filter(function(l){ return legKey(l.market) === key && l.mk === nl.mk; })[0];
+      if (clash) parlayLegs[parlayLegs.indexOf(clash)] = nl;
+      else if (parlayLegs.length >= MAX_LEGS) toast('A parlay can have up to ' + MAX_LEGS + ' legs.', 'err');
+      else parlayLegs.push(nl);
+    }
+    betCode = ''; render();
+  }
   else if (act === 'slip') { slip = { mk:t.dataset.mk, market:t.dataset.market, side:t.dataset.side }; betCode = ''; render(); var sp = document.querySelector('.slip'); if (sp && sp.scrollIntoView) sp.scrollIntoView({ block:'nearest' }); }
-  else if (act === 'slip-clear') { slip = null; betCode = ''; stakeVal = ''; render(); }
-  else if (act === 'bet-code') { betCode = encodeCode(betPayload()); render(); }
+  else if (act === 'slip-clear') { if (slipMode === 'parlay') parlayLegs = []; else slip = null; betCode = ''; stakeVal = ''; render(); }
+  else if (act === 'bet-code') { betCode = encodeCode(slipMode === 'parlay' ? parlayPayload() : betPayload()); render(); }
   else if (act === 'bet-save') {
-    var b = betPayload(); var dd = clone(D());
+    var b = slipMode === 'parlay' ? parlayPayload() : betPayload(); var dd = clone(D());
     dd.book = dd.book || { posted:{}, bets:[] }; dd.book.bets = dd.book.bets || [];
-    dd.book.bets.push({ id:b.id, who:b.who, mk:b.mk, market:b.market, side:b.side, team:b.team, line:b.line, price:b.price, stake:b.stake, at:b.at, status:'pending' });
-    slip = null; stakeVal = '';
+    dd.book.bets.push({ id:b.id, who:b.who, mk:b.mk, market:b.market, side:b.side, team:b.team, line:b.line, price:b.price, stake:b.stake, at:b.at, status:'pending', legs:b.legs });
+    if (slipMode === 'parlay') parlayLegs = []; else slip = null;
+    stakeVal = '';
     saveData(dd, 'Bet sent for approval. Reloading…');
   }
   else if (act === 'accept' || act === 'reject') edit(function(d){ d.book.bets.forEach(function(b){ if (b.id === t.dataset.id) b.status = act === 'accept' ? 'open' : 'rejected'; }); });
@@ -1802,7 +1912,11 @@ function bookInput(e){
   if (e.target.id === 'stake') {
     stakeVal = e.target.value;
     var sel = findSel(), out = $('#towin'), n = parseStake(stakeVal);
-    if (sel && out) out.textContent = money(n > 0 ? profit(n, sel.sd.price) : 0);
+    if (slipMode === 'parlay') {
+      var pd = parlayLegs.map(legInfo).filter(Boolean).reduce(function(acc, x){ return acc * decOdds(x.sd.price); }, 1);
+      if (out) out.textContent = money(n > 0 ? n * (pd - 1) : 0);
+    }
+    else if (sel && out) out.textContent = money(n > 0 ? profit(n, sel.sd.price) : 0);
     betCode = '';
     clearTimeout(bookInput.t);
     bookInput.t = setTimeout(function(){ var pos = e.target.selectionStart; render(); var el = $('#stake'); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (x) {} } }, 500);
