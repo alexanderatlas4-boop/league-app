@@ -88,7 +88,15 @@ td.name,th.l,td.l{text-align:left}
 .pk-list{display:grid;gap:8px}
 .pk-row{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:8px}
 .pk{display:flex;flex-direction:column;align-items:flex-start;gap:2px;border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:10px 12px;cursor:pointer;text-align:left;min-width:0}
-.pk:nth-child(3){align-items:flex-end;text-align:right}
+.pk-side{display:flex;flex-direction:column;gap:6px;min-width:0}
+.pk-side .pk{width:100%}
+.pk-side:nth-child(3){align-items:flex-end}
+.pk-side:nth-child(3) .pk{align-items:flex-end;text-align:right}
+.pk-who{display:flex;flex-wrap:wrap;gap:4px;padding:0 2px}
+.pk-side:nth-child(3) .pk-who{justify-content:flex-end}
+.pk-who .chip{font-size:12px;line-height:1.5;border:1px solid var(--line);border-radius:999px;padding:0 8px;color:var(--ink);white-space:nowrap}
+.pk-who .chip.mine{border-color:var(--pennant);font-weight:700}
+.pk-who .none{font-size:12px;color:var(--muted)}
 .pk .pk-n{font-weight:700;overflow-wrap:anywhere}
 .pk .pk-s{font-size:12px;color:var(--muted)}
 .pk[aria-pressed="true"]{border-color:var(--pennant);background:var(--pennant);color:var(--pennant-ink)}
@@ -1270,8 +1278,10 @@ function picksPanel(P){
       var on = pickSel.p[k] === team;
       var pct = pr ? Math.round((team === pr.a ? pr.pa : 1 - pr.pa) * 100) + '%' : '';
       var count = locked ? who.filter(function(m){ return saved[m].p && saved[m].p[k] === team; }).length : null;
-      return '<button type="button" class="pk" data-act="pick" data-k="' + esc(k) + '" data-team="' + esc(team) + '" aria-pressed="' + on + '"' + (locked || !me ? ' disabled' : '') + '>' +
-        '<span class="pk-n">' + esc(team) + '</span><span class="pk-s">' + (locked ? count + ' pick' + (count === 1 ? '' : 's') : pct + ' to win') + '</span></button>';
+      var pickers = who.filter(function(m){ return saved[m].p && saved[m].p[k] === team; }).sort();
+      return '<div class="pk-side"><button type="button" class="pk" data-act="pick" data-k="' + esc(k) + '" data-team="' + esc(team) + '" aria-pressed="' + on + '"' + (locked || !me ? ' disabled' : '') + '>' +
+        '<span class="pk-n">' + esc(team) + '</span><span class="pk-s">' + (locked ? count + ' pick' + (count === 1 ? '' : 's') : pct + ' to win') + '</span></button>' +
+        '<div class="pk-who" aria-label="Picked ' + esc(team) + '">' + (pickers.length ? pickers.map(function(m){ return '<span class="chip' + (m === me ? ' mine' : '') + '">' + esc(m) + '</span>'; }).join('') : '<span class="none">No picks yet</span>') + '</div></div>';
     };
     return '<div class="pk-row">' + btn(g.a) + '<span class="pk-vs">vs</span>' + btn(g.b) + '</div>';
   }).join('') + '</div>';
