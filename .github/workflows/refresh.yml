@@ -4,7 +4,15 @@ on:
   schedule:
     - cron: "0 12 * * 2"     # Tuesdays 12:00 UTC (8 AM ET), after Monday night's games
     # - cron: "0 18 * * 4"   # Optional: Thursdays 2 PM ET, to pick up lineup and injury news
-  workflow_dispatch: {}      # lets you run it by hand from the Actions tab
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "First season to load (blank = just this season)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
 
 jobs:
   refresh:
@@ -21,3 +29,14 @@ jobs:
           ESPN_LEAGUE_ID: ${{ secrets.ESPN_LEAGUE_ID }}
           ESPN_S2: ${{ secrets.ESPN_S2 }}
           ESPN_SWID: ${{ secrets.ESPN_SWID }}
+          START: ${{ github.event.inputs.start }}
+      # GitHub pauses scheduled jobs in public repos after 60 days without activity.
+      # Recording each run keeps the weekly schedule alive all season.
+      - name: Keep the schedule alive
+        run: |
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .last_refresh
+          git config user.name "league-bot"
+          git config user.email "league-bot@users.noreply.github.com"
+          git add .last_refresh
+          git commit -m "Weekly refresh" || exit 0
+          git push
