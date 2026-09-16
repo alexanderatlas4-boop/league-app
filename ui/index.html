@@ -1168,7 +1168,7 @@ function inferPlayoffTeams(){
 }
 function cfg(){
   var s = D().settings || {};
-  return { topUp: s.topUp == null ? 100 : Math.max(0, +s.topUp || 0), bankroll: +s.bankroll || 1000, playoffTeams: +s.playoffTeams || inferPlayoffTeams(), kickoff: s.kickoff || { '2026':'2026-09-10' }, lockAt: s.lockAt || '20:15', allowSelf: !!s.allowSelf, requireApproval: !!s.requireApproval };
+  return { topUp: s.topUp == null ? 100 : Math.max(0, +s.topUp || 0), bankroll: +s.bankroll || 1000, playoffTeams: +s.playoffTeams || inferPlayoffTeams(), kickoff: s.kickoff || { '2026':'2026-09-10' }, lockAt: s.lockAt || '20:15', allowSelf: !!s.allowSelf, requireApproval: !!s.requireApproval, maxBet: +s.maxBet || 100 };
 }
 function nthSunday(y, m, n){ var first = new Date(Date.UTC(y, m - 1, 1)).getUTCDay(); return 1 + ((7 - first) % 7) + 7 * (n - 1); }
 function usDST(y, m, d){ if (m < 3 || m > 11) return false; if (m > 3 && m < 11) return true; return m === 3 ? d >= nthSunday(y, 3, 2) : d < nthSunday(y, 11, 1); }
@@ -1307,7 +1307,16 @@ function odds(a){ return a > 0 ? '+' + a : String(a); }
 function profit(stake, price){ return price > 0 ? stake * price / 100 : stake * 100 / -price; }
 function half(x){ return Math.round(x * 2) / 2; }
 function fmtSpread(x){ return x === 0 ? 'PK' : (x > 0 ? '+' : '') + x.toFixed(1); }
-function money(n){ var r = Math.round(n); return (r < 0 ? '−' : '') + '$' + Math.abs(r).toLocaleString(); }
+function units(n, signed){
+  var v = Math.round(n * 100) / 100, a = Math.abs(v);
+  var t = a % 1 ? a.toLocaleString(undefined, { minimumFractionDigits:2, maximumFractionDigits:2 }) : a.toLocaleString();
+  return (v < 0 ? '−' : signed && v > 0 ? '+' : '') + '$' + t;
+}
+function money(n){ return units(n, false); }
+function parseStake(v){
+  var x = Number(v);
+  return v !== '' && isFinite(x) && x >= 1 && x <= cfg().maxBet && Math.floor(x) === x ? x : 0;
+}
 function mulberry(a){ return function(){ a |= 0; a = a + 0x6D2B79F5 | 0; var t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 
 function autoWeek(){
@@ -1467,8 +1476,8 @@ function weeksPlayed(season){
   return Object.keys(wk).length;
 }
 function ledger(season){
-  var c = cfg(), rows = {}, bonus = c.topUp * weeksPlayed(season);
-  L.managers.forEach(function(m){ rows[m] = { m:m, start:c.bankroll + bonus, bonus:bonus, pl:0, risk:0, pending:0, w:0, l:0, p:0, bets:0 }; });
+  var rows = {};
+  L.managers.forEach(function(m){ rows[m] = { m:m, pl:0, risk:0, pending:0, w:0, l:0, p:0, bets:0, staked:0 }; });
   bets().forEach(function(b){
     if (+b.mk.split('|')[0] !== season) return;
     var r = rows[b.who];
@@ -1478,11 +1487,11 @@ function ledger(season){
     var gr = gradeBet(b);
     r.bets++;
     if (!gr) r.risk += b.stake;
-    else if (gr === 'win') { r.pl += profit(b.stake, b.price); r.w++; }
-    else if (gr === 'loss') { r.pl -= b.stake; r.l++; }
+    else if (gr === 'win') { r.pl += profit(b.stake, b.price); r.w++; r.staked += b.stake; }
+    else if (gr === 'loss') { r.pl -= b.stake; r.l++; r.staked += b.stake; }
     else if (gr === 'push') r.p++;
   });
-  Object.keys(rows).forEach(function(m){ var r = rows[m]; r.balance = r.start + r.pl; r.avail = r.balance - r.risk - r.pending; });
+  Object.keys(rows).forEach(function(m){ var r = rows[m]; r.balance = r.pl; r.roi = r.staked ? r.pl / r.staked : null; });
   return rows;
 }
 function sideLine(m, sd){
@@ -1560,29 +1569,29 @@ function findSel(){
 function slipPanel(me, led){
   var sel = findSel();
   if (!sel) return '<section class="panel slip"><h3>Bet slip</h3><p class="muted">Tap any posted line to start a bet.</p></section>';
-  var locked = marketLocked(slip.mk), stake = Math.floor(+stakeVal || 0), avail = me ? led[me].avail : 0;
+  var locked = marketLocked(slip.mk), stake = parseStake(stakeVal);
   var label = betLabel({ market:sel.m.id, team:sel.sd.team, side:sel.sd.id, line:sel.sd.line, label:sel.sd.label });
   var selfErr = againstSelf(me, sel.m.id, sel.sd.id, sel.sd.team);
-  var err = !me ? (authOn() || SERVER ? 'Sign in first.' : 'Choose your name first.') : locked ? 'This line is locked.' : selfErr ? selfErr : stake > avail ? 'That\'s more than your available ' + money(avail) + '.' : '';
+  var err = !me ? (authOn() || SERVER ? 'Sign in first.' : 'Choose your name first.') : locked ? 'This line is locked.' : selfErr ? selfErr : (stakeVal !== '' && !stake) ? 'Bets run from $1 to ' + units(cfg().maxBet) + ', in whole dollars.' : '';
   return '<section class="panel slip"><h3>Bet slip</h3><p class="slip-sel"><b>' + esc(label) + '</b> <span class="ln-p">' + odds(sel.sd.price) + '</span></p>' +
     '<p class="muted">' + esc(sel.m.title) + (sel.m.kind === 'wins' || sel.m.kind === 'title' || sel.m.kind === 'pf' || sel.m.kind === 'po' ? '' : ', week ' + esc(slip.mk.split('|')[1])) + '</p>' +
-    '<div class="slip-row"><label>Stake <input type="number" min="1" step="1" inputmode="numeric" id="stake" value="' + esc(stakeVal) + '"></label>' +
+    '<div class="slip-row"><label>Stake ($) <input type="number" min="1" max="' + cfg().maxBet + '" step="1" inputmode="numeric" id="stake" value="' + esc(stakeVal) + '"></label>' +
     '<p>To win <b id="towin">' + money(stake > 0 ? profit(stake, sel.sd.price) : 0) + '</b></p></div>' +
     (err ? '<p class="neg">' + esc(err) + '</p>' : '') +
     '<div class="actions" style="justify-content:flex-start">' +
-    (canSubmit() ? '<button type="button" class="btn primary" data-act="bet-save"' + (err || stake < 1 ? ' disabled' : '') + '>Place bet</button>' : '') +
-    (SERVER ? '' : '<button type="button" class="btn' + (canWrite() ? '' : ' primary') + '" data-act="bet-code"' + (err || stake < 1 ? ' disabled' : '') + '>Get bet code</button>') +
+    (canSubmit() ? '<button type="button" class="btn primary" data-act="bet-save"' + (err || !stake ? ' disabled' : '') + '>Place bet</button>' : '') +
+    (SERVER ? '' : '<button type="button" class="btn' + (canWrite() ? '' : ' primary') + '" data-act="bet-code"' + (err || !stake ? ' disabled' : '') + '>Get bet code</button>') +
     '<button type="button" class="btn" data-act="slip-clear">Clear</button></div>' +
     (betCode ? '<div class="codebox"><p>Text this code to the commissioner. The bet counts once they accept it.</p><textarea readonly class="code" rows="2" data-selectall>' + esc(betCode) + '</textarea><button type="button" class="btn" data-act="copy" data-text="' + esc(betCode) + '">Copy code</button></div>' : '') +
     '</section>';
 }
 function betPayload(){
   var sel = findSel(), me = getMe();
-  return signPayload({ t:'bet', v:1, id:uid(), who:me, mk:slip.mk, market:sel.m.id, side:sel.sd.id, team:sel.sd.team || null, line:sel.sd.line == null ? null : sel.sd.line, price:sel.sd.price, stake:Math.floor(+stakeVal), at:Date.now() });
+  return signPayload({ t:'bet', v:1, id:uid(), who:me, mk:slip.mk, market:sel.m.id, side:sel.sd.id, team:sel.sd.team || null, line:sel.sd.line == null ? null : sel.sd.line, price:sel.sd.price, stake:parseStake(stakeVal), at:Date.now() });
 }
 function betRow(b, manage){
   var gr = b.status === 'open' ? gradeBet(b) : null;
-  var res = b.status === 'pending' ? 'Awaiting approval' : b.status === 'rejected' ? 'Rejected' : !gr ? 'Open' : gr === 'win' ? 'Won ' + money(profit(b.stake, b.price)) : gr === 'loss' ? 'Lost ' + money(b.stake) : gr === 'push' ? 'Push' : 'Void';
+  var res = b.status === 'pending' ? 'Awaiting approval' : b.status === 'rejected' ? 'Rejected' : !gr ? 'Open' : gr === 'win' ? 'Won ' + units(profit(b.stake, b.price), true) : gr === 'loss' ? 'Lost ' + units(-b.stake, true) : gr === 'push' ? 'Push' : 'Void';
   var cl = gr === 'win' ? 'pos' : gr === 'loss' ? 'neg' : 'muted';
   var wk = b.mk.split('|')[1];
   return '<tr>' + (manage !== false ? '<td class="name">' + esc(b.who) + '</td>' : '') + '<td class="l">' + esc(betLabel(b)) + '</td><td>' + (wk === 'season' ? 'Season' : 'Week ' + esc(wk)) + '</td><td>' + odds(b.price) + '</td><td>' + money(b.stake) + '</td><td class="' + cl + '">' + res + '</td>' +
@@ -1622,11 +1631,10 @@ function managerPanel(aw, as){
     '<div class="actions" style="justify-content:flex-start"><button type="button" class="btn" data-act="add-codes">Add codes</button></div></div>';
   out += '<div class="mgr-block"><h3>Open bets</h3>' + (open.length ? '<p class="muted">Bets grade themselves from results. Override one here if needed.</p><div class="scroll"><table><thead><tr><th class="l">Bettor</th><th class="l">Bet</th><th>When</th><th>Odds</th><th>Stake</th><th>Result</th><th>Grade</th></tr></thead><tbody>' + open.slice().reverse().map(function(b){ return betRow(b, 'grade'); }).join('') + '</tbody></table></div>' : '<p class="muted">No bets yet this season.</p>') + '</div>';
   out += '<div class="mgr-block"><h3>Settings</h3><div class="settings">' +
-    '<label>Starting bankroll <input type="number" min="1" step="50" data-set="bankroll" value="' + c.bankroll + '"></label>' +
-    '<label>Weekly top-up <input type="number" min="0" step="25" data-set="topUp" value="' + c.topUp + '"></label>' +
     '<label>Playoff teams <input type="number" min="2" max="16" step="1" data-set="playoffTeams" value="' + c.playoffTeams + '"></label>' +
     '<label>' + s + ' week 1 Thursday <input type="date" data-set="kickoff" value="' + esc(c.kickoff[s] || '') + '"></label>' +
-    '<label>Lock time (Eastern) <input type="time" data-set="lockAt" value="' + esc(c.lockAt) + '"></label></div>' +
+    '<label>Lock time (Eastern) <input type="time" data-set="lockAt" value="' + esc(c.lockAt) + '"></label>' +
+    '<label>Max bet ($) <input type="number" min="1" step="5" data-set="maxBet" value="' + c.maxBet + '"></label></div>' +
     '<label class="check"><input type="checkbox" data-set="allowSelf"' + (c.allowSelf ? ' checked' : '') + '> Allow betting against your own team</label>' +
     (SERVER ? '<label class="check"><input type="checkbox" data-set="requireApproval"' + (c.requireApproval ? ' checked' : '') + '> Bets need my approval</label>' : '') + '</div>';
   out += SERVER ? serverAdminBlock() : passwordsBlock();
@@ -1636,14 +1644,14 @@ function viewBook(){
   var s = curSeason(), me = getMe(), led = ledger(s);
   var aw = autoWeek(), as = autoSeason();
   var pw = aw && posted(aw.mk), ps = posted(s + '|season');
-  var out = '<div class="stack"><section><div class="picks-head"><div><h2 style="margin:0">Sportsbook</h2><p class="lede" style="margin:4px 0 0">Play money only. Everyone starts ' + s + ' with ' + money(cfg().bankroll) + ' in league bucks' + (cfg().topUp ? ' and gets ' + money(cfg().topUp) + ' more at the start of every new week' : '') + '. Lines come from the league model and update after each week\'s results. Bet on any matchup, any week. You can\'t bet against your own team.' + (SERVER && !cfg().requireApproval ? ' Bets lock when each week locks.' : ' The commissioner approves bets.') + '</p></div>' + mePicker() + '</div></section>';
+  var out = '<div class="stack"><section><div class="picks-head"><div><h2 style="margin:0">Sportsbook</h2><p class="lede" style="margin:4px 0 0">Play money with no starting balance: bet $1 to ' + units(cfg().maxBet) + ' at a time, and your season net moves at the posted odds. Lines come from the league model and update after each week\'s results. Bet on any matchup, any week. You can\'t bet against your own team.' + (SERVER && !cfg().requireApproval ? ' Bets lock when each week locks.' : ' The commissioner approves bets.') + '</p></div>' + mePicker() + '</div></section>';
   if (me) {
     var r = led[me];
     out += '<section class="panel"><div class="facts">' +
-      '<div class="fact"><div class="v">' + money(r.balance) + '</div><div class="k">Balance' + (r.bonus ? ', incl. ' + money(r.bonus) + ' in top-ups' : '') + '</div></div>' +
-      '<div class="fact"><div class="v">' + money(r.avail) + '</div><div class="k">Available to bet</div></div>' +
-      '<div class="fact"><div class="v">' + money(r.risk + r.pending) + '</div><div class="k">In play or awaiting approval</div></div>' +
-      '<div class="fact"><div class="v">' + rec(r.w, r.l, r.p) + '</div><div class="k">Record</div></div></div></section>';
+      '<div class="fact"><div class="v ' + cls(r.pl) + '">' + units(r.pl, true) + '</div><div class="k">Season net</div></div>' +
+      '<div class="fact"><div class="v">' + rec(r.w, r.l, r.p) + '</div><div class="k">Record</div></div>' +
+      '<div class="fact"><div class="v">' + (r.roi == null ? '–' : (r.roi > 0 ? '+' : '') + Math.round(r.roi * 100) + '%') + '</div><div class="k">Return on money risked</div></div>' +
+      '<div class="fact"><div class="v">' + units(r.risk + r.pending) + '</div><div class="k">In play</div></div></div></section>';
   }
   out += '<details class="more panel"><summary>How the lines are set</summary><div class="explain">' +
     '<p>' + esc(modelBlurb(scoreSD())) + '</p>' +
@@ -1666,9 +1674,9 @@ function viewBook(){
   }
   var board = Object.keys(led).map(function(m){ return led[m]; }).filter(function(r){ return r.bets || r.pending; }).sort(function(a, b){ return b.balance - a.balance; });
   var house = -Object.keys(led).reduce(function(a, m){ return a + led[m].pl; }, 0);
-  out += '<section class="panel scroll"><h3>Bettor standings</h3>' + (board.length ? '<table><thead><tr><th>#</th><th class="l">Bettor</th><th>Balance</th><th>Profit</th><th>Record</th><th>In play</th></tr></thead><tbody>' +
-    board.map(function(r, i){ return '<tr><td>' + (i + 1) + '</td><td class="name">' + esc(r.m) + '</td><td>' + money(r.balance) + '</td><td class="' + cls(r.pl) + '">' + (r.pl > 0 ? '+' : '') + money(r.pl) + '</td><td>' + rec(r.w, r.l, r.p) + '</td><td>' + money(r.risk + r.pending) + '</td></tr>'; }).join('') +
-    '</tbody></table><p class="muted" style="margin-top:8px">Profit counts betting results only' + (cfg().topUp ? '; balances also include weekly top-ups' : '') + '. The book is ' + (house >= 0 ? 'up ' : 'down ') + money(Math.abs(house)) + ' this season.</p>' : '<p class="muted">No bets settled or placed yet.</p>') + '</section>';
+  out += '<section class="panel scroll"><h3>Bettor standings</h3>' + (board.length ? '<table><thead><tr><th>#</th><th class="l">Bettor</th><th>Net</th><th>Record</th><th>Return</th><th>In play</th></tr></thead><tbody>' +
+    board.map(function(r, i){ return '<tr><td>' + (i + 1) + '</td><td class="name">' + esc(r.m) + '</td><td class="' + cls(r.pl) + '"><b>' + units(r.pl, true) + '</b></td><td>' + rec(r.w, r.l, r.p) + '</td><td>' + (r.roi == null ? '–' : (r.roi > 0 ? '+' : '') + Math.round(r.roi * 100) + '%') + '</td><td>' + units(r.risk + r.pending) + '</td></tr>'; }).join('') +
+    '</tbody></table><p class="muted" style="margin-top:8px">Play-money results at the posted odds. The book is ' + (house >= 0 ? 'up ' : 'down ') + units(Math.abs(house)) + ' this season.</p>' : '<p class="muted">No bets settled or placed yet.</p>') + '</section>';
   if (canWrite()) out += managerPanel(aw, as);
   if (SERVER && !SERVER.admin) out += '<p class="muted" style="margin-top:8px"><button type="button" class="linkish" data-act="srv-admin-open">Commissioner tools</button>' +
     (adminOpen ? ' <span class="me signin" style="display:inline-flex"><input type="password" id="srv-admin-pw" placeholder="Commissioner password" aria-label="Commissioner password"> <button type="button" class="btn sm" data-act="srv-admin">Unlock</button></span>' : '') + '</p>';
@@ -1793,7 +1801,7 @@ function bookKey(e){
 function bookInput(e){
   if (e.target.id === 'stake') {
     stakeVal = e.target.value;
-    var sel = findSel(), out = $('#towin'), n = Math.floor(+stakeVal || 0);
+    var sel = findSel(), out = $('#towin'), n = parseStake(stakeVal);
     if (sel && out) out.textContent = money(n > 0 ? profit(n, sel.sd.price) : 0);
     betCode = '';
     clearTimeout(bookInput.t);
