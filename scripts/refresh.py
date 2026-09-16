@@ -19,6 +19,10 @@ def run(start=None, end=None, url=None):
     rows = espn(league, start, end, os.environ.get("ESPN_S2"), os.environ.get("ESPN_SWID"))
     eng = db.engine(url)
     db.init(eng)
+    rename_from = os.environ.get("RENAME_FROM", "").strip()
+    if rename_from:  # optional: show an ESPN name differently everywhere
+        db.set_rename(eng, rename_from, os.environ.get("RENAME_TO", "").strip())
+        print(f"Name change saved: {rename_from} -> {os.environ.get('RENAME_TO', '').strip() or '(removed)'}")
     seasons, n_games, n_strength = db.replace_seasons(eng, rows)
     teams = {r[2] for r in rows if r[6] not in ("strength",)} | {r[4] for r in rows if r[6] not in ("strength",)}
     ren = db.load_renames(eng)
