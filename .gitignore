@@ -1,0 +1,6 @@
+league.db
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+*.csv
+.venv/
