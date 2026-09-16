@@ -37,7 +37,7 @@ SCHEMA = [
 ]
 
 DEFAULTS = {
-    "league_name": "Home League",
+    "league_name": "Mickey Mouse Fantasy League",
     "bankroll": 1000,
     "top_up": 100,
     "playoff_teams": 0,            # 0 = infer from past seasons
