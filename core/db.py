@@ -49,7 +49,10 @@ DEFAULTS = {
 
 
 def database_url(explicit: str | None = None) -> str:
-    url = explicit or os.environ.get("DATABASE_URL") or "sqlite:///league.db"
+    url = str(explicit or os.environ.get("DATABASE_URL") or "sqlite:///league.db").strip()
+    if url.upper().startswith("DATABASE_URL"):      # pasted as a whole TOML line
+        url = url.split("=", 1)[1].strip()
+    url = url.strip().strip('"').strip("'").strip()
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
     return url
