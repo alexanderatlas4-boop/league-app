@@ -55,6 +55,12 @@ def database_url(explicit: str | None = None) -> str:
     url = url.strip().strip('"').strip("'").strip()
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):  # use whichever Postgres driver is installed
+        try:
+            import psycopg  # noqa: F401  (psycopg 3)
+            url = "postgresql+psycopg://" + url[len("postgresql://"):]
+        except ImportError:
+            pass
     return url
 
 
