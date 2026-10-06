@@ -207,6 +207,10 @@ table.mini td.name{white-space:normal;min-width:80px}
 ul.story{margin:10px 0 0;padding-left:18px;color:var(--muted);font-size:14px}
 ul.story li{margin:3px 0}
 .column{margin-top:14px;padding:14px 16px;background:var(--bg);border-radius:6px;white-space:pre-wrap;max-width:75ch;line-height:1.6}
+.pwr{margin:0;padding-left:22px}
+.pwr li{margin:0 0 8px}
+.pwr-m{font-weight:700}
+.pwr-t{font-size:13px;color:var(--muted);margin-top:1px}
 .pick{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:16px}
 select{padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:var(--surface);font-weight:600}
 
@@ -1034,13 +1038,223 @@ function previewData(){
   return { s:s, w:w, cards:cards, gotw:gotw, sd:sd };
 }
 
+
+/* ---------------- The weekly column, written from the league's own numbers ---------------- */
+function colSeed(str){
+  var h = 2166136261;
+  for (var i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+function colPick(rng, arr){ return arr[Math.min(arr.length - 1, Math.floor(rng() * arr.length))]; }
+function powerRows(s, w){
+  var per = {}, weeks = {};
+  counted().forEach(function(g){
+    if (g.season !== s || g.week > w) return;
+    sides(g).forEach(function(x){
+      (per[x.m] = per[x.m] || []).push({ week:g.week, pf:x.pf, pa:x.pa });
+      (weeks[g.week] = weeks[g.week] || []).push({ m:x.m, pf:x.pf });
+    });
+  });
+  var names = Object.keys(per);
+  if (!names.length) return [];
+  var all = [];
+  names.forEach(function(m){ per[m].forEach(function(x){ all.push(x.pf); }); });
+  var avg = mean(all), sd = scoreSD();
+  var rows = names.map(function(m){
+    var list = per[m].slice().sort(function(a, b){ return a.week - b.week; });
+    var pfs = list.map(function(x){ return x.pf; });
+    var last3 = pfs.slice(-3);
+    var ap = 0, apN = 0;
+    list.forEach(function(x){
+      var field = (weeks[x.week] || []).filter(function(y){ return y.m !== m; });
+      field.forEach(function(y){ apN++; if (x.pf > y.pf) ap++; else if (x.pf === y.pf) ap += 0.5; });
+    });
+    var apPct = apN ? ap / apN : 0.5;
+    var wins = list.filter(function(x){ return x.pf > x.pa; }).length;
+    var ties = list.filter(function(x){ return x.pf === x.pa; }).length;
+    var sk = { k:null, n:0 };                     // streak within this season only
+    for (var i = list.length - 1; i >= 0; i--) {
+      var res = list[i].pf > list[i].pa ? 'W' : list[i].pf < list[i].pa ? 'L' : 'T';
+      if (sk.k === null) sk.k = res;
+      if (res !== sk.k) break;
+      sk.n++;
+    }
+    return {
+      m:m, gp:list.length, w:wins, l:list.length - wins - ties, t:ties,
+      ppg:mean(pfs), last3:mean(last3), apPct:apPct,
+      winpct:(wins + ties / 2) / list.length,
+      streak:sk,
+      score:0.40 * mean(pfs) + 0.25 * mean(last3) + 0.20 * (avg + (apPct - 0.5) * 2 * sd) +
+            0.15 * (avg + ((wins + ties / 2) / list.length - 0.5) * 2 * sd)
+    };
+  });
+  rows.sort(function(a, b){ return b.score - a.score; });
+  rows.forEach(function(r, i){ r.rank = i + 1; });
+  return rows;
+}
+function powerTable(s, w){
+  var now = powerRows(s, w), prev = powerRows(s, w - 1), pr = {};
+  prev.forEach(function(r){ pr[r.m] = r.rank; });
+  now.forEach(function(r){ r.move = pr[r.m] ? pr[r.m] - r.rank : 0; });
+  return now;
+}
+function colTake(r, rng, n, used){
+  var out = [];
+  if (r.rank === 1) out.push(colPick(rng, [
+    'Everyone else is playing for second right now.',
+    'The scariest lineup in the league, and the record agrees.',
+    'Nobody has found a way to slow this team down yet.']));
+  if (r.rank === n) out.push(colPick(rng, [
+    'Somebody has to be last. It is going about how you would expect.',
+    'The good news is the only direction left is up.',
+    'A rough patch that is starting to look like a trend.']));
+  if (r.move >= 3) out.push(colPick(rng, [
+    'Biggest riser of the week, and it was not close.',
+    'Climbing fast. The waiver pickups are hitting.',
+    'Suddenly looks like a problem for the top of the table.']));
+  if (r.move <= -3) out.push(colPick(rng, [
+    'Free fall. Something needs to change in that lineup.',
+    'Falling faster than anyone wants to admit.',
+    'The slide is real, not just a bad week of matchups.']));
+  if (r.streak.k === 'W' && r.streak.n >= 3) out.push(colPick(rng, [
+    'Winners of ' + r.streak.n + ' straight and playing with house money.',
+    r.streak.n + ' in a row. Belief is setting in.']));
+  if (r.streak.k === 'L' && r.streak.n >= 3) out.push(colPick(rng, [
+    r.streak.n + ' straight losses and counting.',
+    'Still searching for a win. It has been ' + r.streak.n + ' weeks.']));
+  if (r.gp >= 3 && r.apPct >= 0.6 && r.winpct <= 0.5) out.push(colPick(rng, [
+    'Scoring like a contender, losing like a rebuild. The schedule has been brutal.',
+    'Beats most of the league most weeks and has the record of a team that does not.']));
+  if (r.gp >= 3 && r.apPct <= 0.4 && r.winpct >= 0.6) out.push(colPick(rng, [
+    'Living right. The record is real, the scores are not quite.',
+    'Winning the games that matter and not much else. Enjoy it while it lasts.']));
+  if (!out.length) {
+    var fill = [
+      f1(r.ppg) + ' a week and holding steady.',
+      'Quietly fine. Not a threat, not a pushover.',
+      'Hovering in the middle, waiting for a reason to believe.',
+      'Good enough to beat anyone, inconsistent enough to lose to anyone.',
+      'The definition of a wait-and-see team.',
+      'Doing just enough to stay in the conversation.'];
+    var fresh = fill.filter(function(t){ return used.indexOf(t) < 0; });
+    out.push(colPick(rng, fresh.length ? fresh : fill));
+  }
+  used.push(out[0]);
+  return out[0];
+}
+function columnSections(){
+  var R = recapData(), P = previewData();
+  if (!R && !P) return null;
+  var s = R ? R.s : P.s, w = R ? R.w : P.w;
+  var rng = mulberry(colSeed(L.name + '|' + s + '|' + w));
+  var recap = [], ranks = null, preview = [];
+  if (R && R.rows.length >= 2) {
+    var topLine = colPick(rng, [
+      R.top.m + ' put up ' + f2(R.top.pf) + ' and nobody else got close.',
+      'Week ' + R.w + ' belonged to ' + R.top.m + ', who hung ' + f2(R.top.pf) + ' on ' + R.top.o + '.',
+      'High score of the week: ' + R.top.m + ', ' + f2(R.top.pf) + '.']);
+    recap.push(topLine + ' League average was ' + f1(R.avg) + '.');
+    var blow = R.blowout, close = R.closest;
+    if (blow && blow.margin > 0) recap.push(colPick(rng, [
+      blow.W.m + ' beat ' + blow.Lo.m + ' by ' + f2(blow.margin) + ', which is less a game than a public service announcement.',
+      'The beating of the week: ' + blow.W.m + ' over ' + blow.Lo.m + ' by ' + f2(blow.margin) + '.',
+      blow.Lo.m + ' never had a chance, losing to ' + blow.W.m + ' by ' + f2(blow.margin) + '.']));
+    if (close && close !== blow) recap.push(colPick(rng, [
+      'The closest game went to ' + close.W.m + ' by ' + f2(close.margin) + ' over ' + close.Lo.m + '. A different Sunday and that flips.',
+      close.W.m + ' survived ' + close.Lo.m + ' by ' + f2(close.margin) + '. Somebody is still rewatching that one.']));
+    if (R.unlucky && R.reg) recap.push(colPick(rng, [
+      'Spare a thought for ' + R.unlucky.m + ', who scored ' + f2(R.unlucky.pf) + ', beat ' + R.unlucky.beat + ' of ' + (R.n - 1) + ' teams on the scoreboard, and still lost to ' + R.unlucky.o + '.',
+      R.unlucky.m + ' scored ' + f2(R.unlucky.pf) + ' and lost. That is the week in one line.']));
+    if (R.lucky && R.reg && R.lucky !== R.unlucky) recap.push(colPick(rng, [
+      'Meanwhile ' + R.lucky.m + ' won with ' + f2(R.lucky.pf) + ', outscoring exactly ' + R.lucky.beat + ' of ' + (R.n - 1) + ' teams. Take the win and say nothing.',
+      R.lucky.m + ' got the win with ' + f2(R.lucky.pf) + ' and should send ' + R.lucky.o + ' a thank-you note.']));
+    var bigNotes = [];
+    R.rows.forEach(function(r){ r.notes.forEach(function(n){ if (/career high|highest score in league history|Career low/i.test(n)) bigNotes.push(n); }); });
+    if (bigNotes.length) recap.push('For the record book: ' + bigNotes.slice(0, 2).join('; ') + '.');
+    var usedTakes = [];
+    var pt = powerTable(R.s, R.w);
+    ranks = pt.map(function(r){
+      return { rank:r.rank, m:r.m, move:r.move, rec:rec(r.w, r.l, r.t), ppg:r.ppg, take:colTake(r, rng, pt.length, usedTakes) };
+    });
+  }
+  if (P) {
+    var gw = P.gotw;
+    if (gw) {
+      var fav = gw.pA >= 0.5 ? gw.g.a : gw.g.b, dog = gw.pA >= 0.5 ? gw.g.b : gw.g.a;
+      var fp = Math.round(Math.max(gw.pA, 1 - gw.pA) * 100);
+      preview.push(colPick(rng, [
+        'Game of the week: ' + gw.g.a + ' vs ' + gw.g.b + '. The model likes ' + fav + ' at ' + fp + '%, which in this league means nothing.',
+        'Everything points at ' + gw.g.a + ' vs ' + gw.g.b + ' this week, with ' + fav + ' a ' + fp + '% favorite.']) +
+        (gw.story && gw.story.length ? ' ' + gw.story[0] : ''));
+    }
+    var upset = P.cards.slice().sort(function(x, y){ return Math.abs(y.pA - 0.5) - Math.abs(x.pA - 0.5); })[0];
+    if (upset && upset !== gw) {
+      var uf = upset.pA >= 0.5 ? upset.g.a : upset.g.b, ud = upset.pA >= 0.5 ? upset.g.b : upset.g.a;
+      preview.push(colPick(rng, [
+        'Biggest mismatch on paper: ' + uf + ' over ' + ud + ' at ' + Math.round(Math.max(upset.pA, 1 - upset.pA) * 100) + '%. ' + ud + ' is the week\'s designated miracle.',
+        uf + ' should handle ' + ud + ', and ' + ud + ' has the whole week to prove otherwise.']));
+    }
+    var toss = P.cards.slice().sort(function(x, y){ return Math.abs(x.pA - 0.5) - Math.abs(y.pA - 0.5); })[0];
+    if (toss && toss !== gw && toss !== upset) preview.push('Closest to a coin flip: ' + toss.g.a + ' vs ' + toss.g.b + '.');
+    if (ranks && ranks.length) {
+      var top = ranks[0], bottom = ranks[ranks.length - 1];
+      preview.push(colPick(rng, [
+        'Bold prediction: ' + top.m + ' keeps the top spot and ' + bottom.m + ' finds a way to lose by single digits.',
+        'Bold prediction: somebody in the bottom three outscores ' + top.m + ' and tells you about it all week.',
+        'Bold prediction: the ' + (toss ? toss.g.a + ' vs ' + toss.g.b : 'closest') + ' game decides more of this season than anyone expects.']));
+    }
+  }
+  var heads = R ? [
+    'Week ' + R.w + ': ' + R.top.m + ' sets the pace',
+    'Week ' + R.w + ' in review: ' + f1(R.avg) + ' was the bar',
+    R.top.m + ' leads the way in week ' + R.w,
+    'Week ' + R.w + ': ' + (R.blowout ? R.blowout.Lo.m + ' would like a word with the schedule' : 'the field tightens')] :
+    ['Looking ahead to week ' + (P ? P.w : '')];
+  return { s:s, w:w, headline:colPick(rng, heads), recap:recap, ranks:ranks, preview:preview };
+}
+function columnText(){
+  var c = columnSections();
+  if (!c) return '';
+  var out = [c.headline, ''];
+  if (c.recap.length) out.push(c.recap.join(' '), '');
+  if (c.ranks) {
+    out.push('POWER RANKINGS');
+    c.ranks.forEach(function(r){
+      out.push(r.rank + '. ' + r.m + ' (' + r.rec + ', ' + f1(r.ppg) + ' a week)' +
+        (r.move ? ' ' + (r.move > 0 ? '+' + r.move : r.move) : '') + ' — ' + r.take);
+    });
+    out.push('');
+  }
+  if (c.preview.length) out.push('LOOKING AHEAD', c.preview.join(' '));
+  return out.join('\n').trim();
+}
+function columnPanel(){
+  var c = columnSections();
+  if (!c) return '';
+  var out = '<section class="panel"><h3>The week ' + c.w + ' column</h3>' +
+    '<p class="muted" style="margin-bottom:10px">Written automatically from this week\'s numbers. Tap copy to paste it in the group chat.</p>' +
+    '<div class="column"><p style="font-weight:700;margin:0 0 10px">' + esc(c.headline) + '</p>';
+  if (c.recap.length) out += '<p style="margin:0 0 12px">' + esc(c.recap.join(' ')) + '</p>';
+  if (c.ranks) {
+    out += '<p style="font-weight:700;margin:0 0 6px">Power rankings</p><ol class="pwr">' +
+      c.ranks.map(function(r){
+        return '<li><span class="pwr-m">' + esc(r.m) + '</span> <span class="muted">' + r.rec + ', ' + f1(r.ppg) + '/wk</span> ' +
+          '<span class="' + (r.move > 0 ? 'pos' : r.move < 0 ? 'neg' : 'muted') + '">' + (r.move > 0 ? '▲' + r.move : r.move < 0 ? '▼' + (-r.move) : '–') + '</span>' +
+          '<div class="pwr-t">' + esc(r.take) + '</div></li>';
+      }).join('') + '</ol>';
+  }
+  if (c.preview.length) out += '<p style="font-weight:700;margin:12px 0 6px">Looking ahead</p><p style="margin:0">' + esc(c.preview.join(' ')) + '</p>';
+  out += '</div><div class="actions" style="justify-content:flex-start;margin-top:10px"><button type="button" class="btn" data-act="column-copy">Copy for the group chat</button></div></section>';
+  return out;
+}
+
 var column = { text:'', busy:false, ctl:null, note:'' };
 function modelBlurb(sd){
   return 'Projected scores are 70% ESPN\'s projection for each lineup and 30% the team\'s own scoring history (this season, leaning on a toned-down last season early on). Head-to-head history and win-loss record are shown for context but don\'t move the odds. Weekly scores swing about ' + Math.round(sd) + ' points either way, so nothing here is a lock.';
 }
 function viewWeek(){
   var R = recapData(), P = previewData();
-  var out = '<div class="stack">' + picksPanel(P);
+  var out = '<div class="stack">' + picksPanel(P) + columnPanel();
   if (R) {
     var aw = function(title, x, extra){ return x ? '<div class="award"><div class="k">' + title + '</div><div class="v">' + esc(x.m) + ' <span class="n">' + f2(x.pf) + '</span></div><div class="d">' + extra + '</div></div>' : ''; };
     var full = R.rows.length >= 3;
@@ -1820,12 +2034,16 @@ function addCodes(){
   toast('Added ' + added + '.' + (skipped.length ? ' Skipped ' + skipped.join(', ') + '.' : '') + (added ? ' Save changes to keep them.' : ''), skipped.length ? 'err' : 'ok');
 }
 
+function columnCopy(){
+  copyText(columnText(), function(ok){ toast(ok ? 'Column copied.' : 'Copy was blocked here. Select the text and copy it manually.', ok ? 'ok' : 'err'); });
+}
 function bookClick(e){
   var t = e.target.closest('[data-act]');
   if (!t) return false;
   var act = t.dataset.act;
   if (authClick(act, t)) return true;
   if (act === 'pick') { pickSel.p[t.dataset.k] = t.dataset.team; pickCode = ''; render(); }
+  else if (act === 'column-copy') columnCopy();
   else if (act === 'pick-save' && SERVER) { var po = pickPayload(); sendAction({ type:'picks', s:po.s, w:po.w, picks:po.p }); }
   else if (act === 'bet-save' && SERVER && slipMode === 'parlay') {
     var pp = parlayPayload();
