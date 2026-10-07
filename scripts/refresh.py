@@ -1,7 +1,8 @@
 """Pull the current season from ESPN into the database. Run weekly (GitHub Actions) or by hand.
 
 Needs env vars: DATABASE_URL, ESPN_LEAGUE_ID, ESPN_S2, ESPN_SWID.
-Optional: SEASON (defaults to this year), START (first season to refresh, defaults to SEASON).
+Optional: SEASON (defaults to this year), START (first season to refresh, defaults to SEASON),
+ANTHROPIC_API_KEY (lets Claude write the weekly column), COLUMN_MODEL.
 """
 import os
 import sys
@@ -28,6 +29,30 @@ def run(start=None, end=None, url=None):
     ren = db.load_renames(eng)
     db.ensure_accounts(eng, {ren.get(t, t) for t in teams if t})
     print(f"Saved seasons {seasons}: {n_games} game rows, {n_strength} roster projections.")
+    write_column(eng)
+
+
+def write_column(eng):
+    """Have Claude write this week's column. Never fails the refresh; the page has its own fallback."""
+    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not key:
+        print("No ANTHROPIC_API_KEY set, so the page will write its own column.")
+        return
+    import time
+    from core.model import League
+    from core import column as col
+    L = League(db.load_games(eng), db.load_strength(eng), db.load_renames(eng))
+    R = L.recap()
+    if not R:
+        return
+    try:
+        text = col.write(L, key, os.environ.get("COLUMN_MODEL") or None)
+    except Exception as e:
+        print(f"Column skipped: {e}")
+        return
+    db.set_setting(eng, "column", dict(season=R["season"], week=R["week"], text=text,
+                                       at=int(time.time() * 1000)))
+    print(f"Claude wrote the week {R['week']} column ({len(text.split())} words).")
 
 
 if __name__ == "__main__":
