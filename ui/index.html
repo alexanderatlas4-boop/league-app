@@ -1228,9 +1228,26 @@ function columnText(){
   if (c.preview.length) out.push('LOOKING AHEAD', c.preview.join(' '));
   return out.join('\n').trim();
 }
+function claudeColumn(){
+  var col = SERVER && SERVER.column;
+  var c = columnSections();
+  if (!col || !col.text || !c) return null;
+  return (col.season === c.s && col.week === c.w) ? col : null;
+}
 function columnPanel(){
   var c = columnSections();
   if (!c) return '';
+  var cc = claudeColumn();
+  var admin = SERVER && SERVER.admin;
+  var buttons = '<div class="actions" style="justify-content:flex-start;margin-top:10px">' +
+    '<button type="button" class="btn" data-act="column-copy">Copy for the group chat</button>' +
+    (admin && SERVER.column_ready ? '<button type="button" class="btn" data-act="column-write">' + (cc ? 'Have Claude write it again' : 'Have Claude write it') + '</button>' : '') +
+    '</div>';
+  if (cc) {
+    return '<section class="panel"><h3>The week ' + c.w + ' column</h3>' +
+      '<p class="muted" style="margin-bottom:10px">Written by Claude from this week\'s numbers.</p>' +
+      '<div class="column">' + esc(cc.text) + '</div>' + buttons + '</section>';
+  }
   var out = '<section class="panel"><h3>The week ' + c.w + ' column</h3>' +
     '<p class="muted" style="margin-bottom:10px">Written automatically from this week\'s numbers. Tap copy to paste it in the group chat.</p>' +
     '<div class="column"><p style="font-weight:700;margin:0 0 10px">' + esc(c.headline) + '</p>';
@@ -1244,7 +1261,7 @@ function columnPanel(){
       }).join('') + '</ol>';
   }
   if (c.preview.length) out += '<p style="font-weight:700;margin:12px 0 6px">Looking ahead</p><p style="margin:0">' + esc(c.preview.join(' ')) + '</p>';
-  out += '</div><div class="actions" style="justify-content:flex-start;margin-top:10px"><button type="button" class="btn" data-act="column-copy">Copy for the group chat</button></div></section>';
+  out += '</div>' + buttons + '</section>';
   return out;
 }
 
@@ -2035,7 +2052,8 @@ function addCodes(){
 }
 
 function columnCopy(){
-  copyText(columnText(), function(ok){ toast(ok ? 'Column copied.' : 'Copy was blocked here. Select the text and copy it manually.', ok ? 'ok' : 'err'); });
+  var cc = claudeColumn();
+  copyText(cc ? cc.text : columnText(), function(ok){ toast(ok ? 'Column copied.' : 'Copy was blocked here. Select the text and copy it manually.', ok ? 'ok' : 'err'); });
 }
 function bookClick(e){
   var t = e.target.closest('[data-act]');
@@ -2044,6 +2062,7 @@ function bookClick(e){
   if (authClick(act, t)) return true;
   if (act === 'pick') { pickSel.p[t.dataset.k] = t.dataset.team; pickCode = ''; render(); }
   else if (act === 'column-copy') columnCopy();
+  else if (act === 'column-write' && SERVER) sendAction({ type:'column' });
   else if (act === 'pick-save' && SERVER) { var po = pickPayload(); sendAction({ type:'picks', s:po.s, w:po.w, picks:po.p }); }
   else if (act === 'bet-save' && SERVER && slipMode === 'parlay') {
     var pp = parlayPayload();
