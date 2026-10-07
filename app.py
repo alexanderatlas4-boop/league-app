@@ -137,8 +137,10 @@ def page_data(L, SET, overrides):
             row["legs"] = [dict(mk=l["mk"], market=l["market_id"], side=l["side"], team=l.get("team"), line=l.get("line"),
                                 price=l["price"]) for l in parlay_legs(b)]
         bets.append(row)
+    col = SET.get("column") or {}
     return dict(
         name=SET.get("league_name") or "Home League",
+        column=col if col.get("text") else None,
         games=games,
         renames=db.load_renames(ENG),
         settings=dict(bankroll=SET.get("bankroll"), topUp=SET.get("top_up"), playoffTeams=SET.get("playoff_teams") or 0,
@@ -186,6 +188,21 @@ def handle(a, L, SET, effective):
         place_bet(a, L, SET, effective)
     elif kind == "parlay":
         place_parlay(a, L, SET, effective)
+    elif kind == "column":
+        if not ss.admin:
+            notify("Commissioner tools are locked.", "err")
+        elif not secret("ANTHROPIC_API_KEY"):
+            notify("Add ANTHROPIC_API_KEY to the app's secrets to have Claude write the column.", "err")
+        else:
+            from core import column as col
+            try:
+                text = col.write(L, str(secret("ANTHROPIC_API_KEY")), secret("COLUMN_MODEL"))
+            except Exception as e:
+                return notify(str(e), "err")
+            R = L.recap()
+            db.set_setting(ENG, "column", dict(season=R["season"] if R else 0, week=R["week"] if R else 0,
+                                               text=text, at=int(time.time() * 1000)))
+            notify("Claude wrote this week's column.")
     elif kind in ("admin_save", "import", "pw_reset", "refresh"):
         if not ss.admin:
             notify("Commissioner tools are locked.", "err")
@@ -393,6 +410,7 @@ lr = db.last_refresh(ENG)
 notice = ss.notice
 action = UI(
     data=data, lines=lines, version=version, me=ss.team, admin=bool(ss.admin),
+    column_ready=bool(secret("ANTHROPIC_API_KEY")),
     last_refresh=("Last update: " + datetime.fromtimestamp(lr["at"] / 1000).strftime("%b %d, %Y %I:%M %p UTC") + f" ({lr['note']})." if lr else ""),
     notice=notice[0] if notice else None, notice_kind=notice[1] if notice else None, notice_id=notice[2] if notice else None,
     key="league_ui", default=None,
